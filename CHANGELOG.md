@@ -1,3 +1,11 @@
+## [Non publié]
+
+### Ajouté
+
+- **Tarif D : séparation prix bas / prix élevé** : trois nouveaux capteurs (consommation à prix bas, à prix élevé, seuil de 40 kWh/jour) ainsi que les capteurs de kWh restants et de moyenne quotidienne restante avant d'atteindre le seuil. Le service `hydroqc.resplit_tarif_d_history` permet de recalculer l'historique existant (voir `TARIF_D_SPLIT.md`).
+
+---
+
 ## [0.9.0] - 2026-11-05
 
 ### Ajouté
