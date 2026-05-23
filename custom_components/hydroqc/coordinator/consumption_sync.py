@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.util import slugify
 
-from ..const import CONF_CONTRACT_NAME
+from ..const import CONF_BILLING_DURATION_ENTITY, CONF_CONTRACT_NAME
 from ..consumption_history import ConsumptionHistoryImporter
 from ..statistics_manager import StatisticsManager
 
@@ -57,8 +57,17 @@ class ConsumptionSyncMixin:
         """Ensure helper modules are initialized (lazy initialization)."""
         if self._statistics_manager is None:
             contract_name = self.entry.data.get(CONF_CONTRACT_NAME, "home")
+            billing_duration_entity = self.entry.options.get(
+                CONF_BILLING_DURATION_ENTITY,
+                self.entry.data.get(CONF_BILLING_DURATION_ENTITY, None),
+            )
             self._statistics_manager = StatisticsManager(
-                self.hass, self._contract, self._rate, self._get_statistic_id, contract_name
+                self.hass,
+                self._contract,
+                self._rate,
+                self._get_statistic_id,
+                contract_name,
+                billing_duration_entity=billing_duration_entity,
             )
         if self._history_importer is None and self._contract is not None:
             self._history_importer = ConsumptionHistoryImporter(
@@ -220,6 +229,40 @@ class ConsumptionSyncMixin:
                 )
             else:
                 _LOGGER.error("Error during initial consumption sync: %s", err)
+
+    def async_resplit_tarif_d_history(self) -> None:
+        """Trigger historical re-split of Tarif D consumption into reg/haut streams.
+
+        This is a one-time operation that reads existing total statistics and
+        derives reg (low-price) and haut (high-price) streams using the
+        40 kWh/day billing period threshold.
+
+        The total stream is left untouched as a rollback safety net.
+        Only available for Tarif D and DCPC rates in portal mode.
+        """
+        if not self.is_portal_mode:
+            _LOGGER.warning("Tarif D re-split only available in portal mode")
+            return
+
+        if self._rate not in {"D"}:
+            _LOGGER.warning(
+                "Tarif D re-split only applicable to Tarif D (current rate: %s)", self._rate
+            )
+            return
+
+        self._ensure_helper_modules()
+
+        async def _do_resplit() -> None:
+            try:
+                if self._statistics_manager is None:
+                    _LOGGER.error("Statistics manager not initialized")
+                    return
+                await self._statistics_manager.resplit_tarif_d_history()
+            except Exception as err:
+                _LOGGER.error("Error during Tarif D re-split: %s", err)
+
+        _LOGGER.info("Scheduling Tarif D historical re-split task")
+        asyncio.create_task(_do_resplit())
 
     def async_sync_consumption_history(self, days_back: int = 731) -> None:
         """Import historical consumption data via CSV (background task).

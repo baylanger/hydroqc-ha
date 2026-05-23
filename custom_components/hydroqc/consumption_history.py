@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.components.recorder import get_instance, statistics
 from homeassistant.core import HomeAssistant
 
+from .const import TARIF_D_HISTORY_PERIOD_DAYS, TARIF_D_THRESHOLD_KWH_PER_DAY
+
 if TYPE_CHECKING:
     from hydroqc.contract.common import Contract
 
@@ -444,6 +446,78 @@ class ConsumptionHistoryImporter:
                 }
             )
 
+            # For Tarif D, also add reg/haut entries (split computed later in _import_statistics)
+            if self._rate == "D" and "reg" in stats_by_type and "haut" in stats_by_type:
+                stats_by_type["reg"].append(
+                    {"start": hour_datetime_tz, "state": total_kwh_value, "_raw": True}
+                )
+                stats_by_type["haut"].append(
+                    {"start": hour_datetime_tz, "state": total_kwh_value, "_raw": True}
+                )
+
+    async def _apply_tarif_d_split(
+        self,
+        raw_stats: list[dict[str, Any]],
+        consumption_type: str,
+    ) -> list[dict[str, Any]]:
+        """Apply Tarif D 40 kWh/day threshold split to raw total consumption records.
+
+        Args:
+            raw_stats: List of hourly records with total kWh as state
+            consumption_type: "reg" or "haut"
+
+        Returns:
+            New list with split values applied
+        """
+        if not raw_stats:
+            return raw_stats
+
+        # Get billing period info from contract
+        period_days = TARIF_D_HISTORY_PERIOD_DAYS  # fallback
+        period_start: datetime.date | None = None
+        if self._statistics_manager._contract:
+            cp_duration = getattr(self._statistics_manager._contract, "cp_duration", None)
+            cp_start = getattr(self._statistics_manager._contract, "cp_start_date", None)
+            if cp_duration:
+                period_days = int(cp_duration)
+            if cp_start:
+                try:
+                    period_start = (
+                        cp_start if isinstance(cp_start, datetime.date)
+                        else datetime.date.fromisoformat(str(cp_start))
+                    )
+                except (ValueError, TypeError):
+                    pass
+
+        threshold = period_days * TARIF_D_THRESHOLD_KWH_PER_DAY
+
+        # Get cumulative total consumed before the first record's date
+        total_statistic_id = self._get_statistic_id("total")
+        first_date = raw_stats[0]["start"].date() if raw_stats else datetime.date.today()
+        consumed_before = await self._statistics_manager._get_period_consumption_before_date(
+            total_statistic_id, first_date, period_start
+        )
+
+        split_stats: list[dict[str, Any]] = []
+        running_consumed = consumed_before
+
+        for record in raw_stats:
+            total_kwh = record["state"]
+            remaining = max(0.0, threshold - running_consumed)
+
+            if consumption_type == "reg":
+                value = min(total_kwh, remaining)
+            else:
+                value = max(0.0, total_kwh - remaining)
+
+            running_consumed += total_kwh
+            split_stats.append({
+                "start": record["start"],
+                "state": value,
+            })
+
+        return split_stats
+
     async def _import_statistics(
         self,
         stats_by_type: dict[str, list[dict[str, Any]]],
@@ -500,6 +574,12 @@ class ConsumptionHistoryImporter:
                     first_date,
                     last_date,
                     start_date,
+                )
+
+            # For Tarif D reg/haut, compute the actual split from total values
+            if self._rate == "D" and consumption_type in {"reg", "haut"}:
+                stats_list = await self._apply_tarif_d_split(
+                    stats_list, consumption_type
                 )
 
             # Query previous day's sum to maintain continuity

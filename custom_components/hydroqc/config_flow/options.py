@@ -16,6 +16,7 @@ from homeassistant.helpers.selector import (
 )
 
 from ..const import (
+    CONF_BILLING_DURATION_ENTITY,
     CONF_CALENDAR_ENTITY_ID,
     CONF_ENABLE_CONSUMPTION_SYNC,
     CONF_PREHEAT_DURATION,
@@ -56,6 +57,7 @@ class HydroQcOptionsFlow(config_entries.OptionsFlow):
         rate_with_option = f"{rate}{rate_option}"
         supports_calendar = rate_with_option in ["DPC", "DCPC"]
         is_portal_mode = self.config_entry.data.get("auth_mode", "portal") == "portal"
+        is_tarif_d = rate in ["D"] and is_portal_mode
 
         # Build schema based on rate capabilities
         schema_dict: dict[Any, Any] = {
@@ -86,6 +88,21 @@ class HydroQcOptionsFlow(config_entries.OptionsFlow):
                     ),
                 )
             ] = bool
+
+        # Add billing duration entity picker for Tarif D/DCPC (optional)
+        if is_tarif_d or rate_with_option == "DCPC":
+            current_billing_entity = self.config_entry.options.get(
+                CONF_BILLING_DURATION_ENTITY,
+                self.config_entry.data.get(CONF_BILLING_DURATION_ENTITY, ""),
+            )
+            schema_dict[
+                vol.Optional(
+                    CONF_BILLING_DURATION_ENTITY,
+                    default=current_billing_entity,
+                )
+            ] = EntitySelector(
+                EntitySelectorConfig(domain="sensor")
+            )
 
         # Add calendar options for DPC/DCPC rates (required)
         if supports_calendar:
