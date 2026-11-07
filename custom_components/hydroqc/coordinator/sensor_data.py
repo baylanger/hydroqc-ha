@@ -43,6 +43,10 @@ class SensorDataMixin:
         if data_source.startswith("computed.tarif_d"):
             return self._get_tarif_d_computed_value(data_source)
 
+        # Handle year-over-year rolling window sensors (cached by YoYStatsMixin)
+        if data_source.startswith("computed_yoy."):
+            return self.get_yoy_value(data_source)
+
         # Handle calendar_peak_handler data source
         # Returns None if no calendar configured (sensors will be unavailable)
         if data_source.startswith("calendar_peak_handler."):
